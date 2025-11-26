@@ -6,7 +6,7 @@
 #          • بيع فوري عند كسر الأرضية (floor breach)
 #          • أو بيع عند هبوط ≥1% من القمّة مع بقاء السعر فوق الأرضية
 #      - Never sell below the last TP touched
-#      - 1h-candle SL after buy time only (then back 6 tracks)
+#      - 1h-candle SL → إشعار فقط (لا بيع؛ المتابعة نحو الأهداف)
 #      - Email Gate replaces OFF window (OFF always False)
 #      - All notifications include SYMBOL + T/C tag via send_notification_tc()
 #      - Early-Exit Guards: stop monitors if slot/trade already closed
@@ -90,8 +90,9 @@ async def execute_trade(symbol: str, entry_price: float, sl_price: float, target
         "amount": amount,
         "track_num": track_num,
         "cycle_num": cycle_num,
-        "start_time": None
-        # simulated: يُستخدم إن كانت الخانة موسومة سابقًا (توافقًا مع الماضي)
+        "start_time": None,
+        # محاكاة الخانة تعتمد على الوضع العام لحظة استلام التوصية
+        "simulated": bool(is_simulation()),
     })
     update_slot_status(structure, track_num, cycle_num, cell)
     save_trade_structure(structure)
@@ -192,10 +193,13 @@ async def monitor_and_execute(
         # مهلة إلغاء: إذا لم نستطع الحصول على سعر لمدة 10 دقائق متواصلة → إلغاء الصفقة
         last_price_ok_ts = time.time()
 
+        # تنبيه SL (دون بيع) — لتفادي تكرار الإشعارات
+        sl_alerted = False
+
         # sim_flag: ثابت للصفقة (من الخانة فقط — لا OFF)
         structure = get_trade_structure()
         cell0 = structure["tracks"][track_num]["cycles"][cycle_num]
-        sim_flag = bool(cell0.get("simulated", False))
+        sim_flag = bool(cell0.get("simulated", is_simulation()))
 
         # --- Helper: DEBUG breakdown للرصد السريع ---
         async def _debug_post_funds(price_now: Optional[float], planned: float, funds_final: float, note: str = ""):
@@ -524,8 +528,8 @@ async def monitor_and_execute(
                         await update_active_trades((track_num, cycle_num), {"symbol": normalize_symbol(symbol)}, final_status="failed")
                         break
 
-                # -------- SL: بعد إغلاق شمعة 1h ≤ SL --------
-                if start_time is not None:
+                # -------- SL: إشعار فقط بدون بيع --------
+                if start_time is not None and not sl_alerted:
                     candle = get_latest_candle(symbol, interval='1hour')
                     now_ms = datetime.now(timezone.utc).timestamp() * 1000.0
                     interval_ms = _interval_to_ms('1hour')
@@ -537,65 +541,14 @@ async def monitor_and_execute(
                         if (candle_end_ms <= now_ms and
                             candle_end_ms > trade_start_ms and
                             candle["close"] <= sl_price + EPS):
-                            try:
-                                sell_order = place_market_order(pair, 'sell', size=str(adjusted_qty),
-                                                                symbol_hint=symbol, sim_override=sim_flag)
-                                order_id = (sell_order or {}).get("orderId")
-                                await asyncio.sleep(1)
-
-                                sell_qty, deal_funds = await get_order_deal_size(order_id, symbol=symbol, sim_override=sim_flag) if order_id else (adjusted_qty, candle["close"] * adjusted_qty)
-                                sell_price = (deal_funds / sell_qty) if (sell_qty and sell_qty > 0) else candle["close"]
-
-                                if '_update_trade_exec_fields' in globals():
-                                    _update_trade_exec_fields(
-                                        normalize_symbol(symbol),
-                                        track_num, cycle_num,
-                                        bought_price=bought_price, sell_price=sell_price, sell_qty=sell_qty
-                                    )
-
-                                pnl = (sell_price - bought_price) * sell_qty
-                                try:
-                                    if pnl >= 0:
-                                        accumulate_summary(profit_delta=float(pnl))
-                                    else:
-                                        accumulate_summary(loss_delta=float(-pnl))
-                                except Exception:
-                                    pass
-
-                                duration = datetime.now(timezone.utc) - start_time
-                                duration_str = f"{duration.days}d / {duration.seconds // 3600}h / {(duration.seconds % 3600)//60}m"
-
-                                current_track_idx = int(track_num)
-                                back_track_idx = max(1, current_track_idx - 6)
-                                structure2 = get_trade_structure()
-                                if str(back_track_idx) not in structure2["tracks"]:
-                                    structure2["tracks"][str(back_track_idx)] = create_new_track(back_track_idx, track_base_amount(back_track_idx))
-                                target_back_amount = structure2["tracks"][str(back_track_idx)]["amount"]
-
-                                m = re.match(r"([A-Za-z]+)", str(cycle_num))
-                                cycle_label = m.group(1).upper() if m else str(cycle_num)
-
-                                await send_notification_tc(
-                                    (
-                                        "🛑 SL hit (1h close):\n"
-                                        f"💵 PnL: {pnl:.4f} USDT\n"
-                                        f"⏱️ Duration: {duration_str}\n"
-                                        f"↩️ Back to Track {back_track_idx} (same letter {cycle_label})\n"
-                                        f"💵 Target track base amount: {target_back_amount} USDT"
-                                    ),
-                                    symbol=symbol, track_num=track_num, cycle_num=cycle_num
-                                )
-
-                                await update_trade_status(symbol, 'stopped', track_num=track_num, cycle_num=cycle_num)
-                                await update_active_trades((track_num, cycle_num), {"symbol": normalize_symbol(symbol)}, final_status="stopped")
-                                save_trade_structure(structure2)
-
-                            except Exception as e:
-                                await send_notification_tc(f"❌ Sell at SL failed: {e}",
-                                                           symbol=symbol, track_num=track_num, cycle_num=cycle_num)
-                                await update_trade_status(symbol, 'failed', track_num=track_num, cycle_num=cycle_num)
-                                await update_active_trades((track_num, cycle_num), {"symbol": normalize_symbol(symbol)}, final_status="failed")
-                            break
+                            sl_alerted = True
+                            await send_notification_tc(
+                                (
+                                    "🛑 SL touched (no sell).\n"
+                                    "➡️ Continuing to monitor for TP1/targets."
+                                ),
+                                symbol=symbol, track_num=track_num, cycle_num=cycle_num
+                            )
 
             # سرعة أخذ العينة
             await asyncio.sleep(poll_sec if 'poll_sec' in locals() else 60)

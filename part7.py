@@ -235,7 +235,8 @@ def _imap_email_text_from_msg(msg: email.message.Message) -> str:
                 body_parts.append(msg.get_payload(decode=True).decode("utf-8", errors="ignore"))
             except Exception:
                 pass
-    full_text = f"{subject_str}\n\n{'\n'.join(body_parts)}"
+    body_joined = "\n".join(body_parts)
+    full_text = f"{subject_str}\n\n{body_joined}"
     return full_text
 
 def _email_says_enable(text: str) -> bool:

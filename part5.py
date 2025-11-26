@@ -1285,6 +1285,7 @@ async def command_handler(event):
 
         arg = parts[1].strip()
         is_index = arg.isdigit()
+        map_dirty = False
 
         # --- Lookup by index ---
         if is_index:
@@ -1310,6 +1311,11 @@ async def command_handler(event):
                 await update_trade_status(symbol_in, 'failed', track_num=track_num, cycle_num=cycle_num)
                 structure["tracks"][track_num]["cycles"][cycle_num] = None
                 save_trade_structure(structure)
+                map_dirty = True
+                try:
+                    _rebuild_status_index_map()
+                except Exception:
+                    pass
                 return
 
             if st == "buy":
@@ -1392,6 +1398,11 @@ async def command_handler(event):
 
                 except Exception as e:
                     await send_notification_tc(f"❌ Sell error: {e}", symbol=symbol_in, track_num=track_num, cycle_num=cycle_num)
+                map_dirty = True
+            try:
+                _rebuild_status_index_map()
+            except Exception:
+                pass
             return
 
         # --- Fallback: sell <symbol> ---
@@ -1488,6 +1499,12 @@ async def command_handler(event):
                         await update_active_trades((track_num, cycle_num), {"symbol": symbol_norm}, final_status="drwn")
                 except Exception as e:
                     await send_notification_tc(f"❌ Sell error: {e}", symbol=symbol_norm, track_num=track_num, cycle_num=cycle_num)
+                map_dirty = True
+        if map_dirty:
+            try:
+                _rebuild_status_index_map()
+            except Exception:
+                pass
         return
 
     # ===== Other commands =====
