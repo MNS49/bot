@@ -870,28 +870,43 @@ def _parse_signal_text(text: str):
     - SL as 'SL - <price>'
     """
     t = (text or "")
+    # إزالة رموز الاتجاه (RTL/LTR) والحروف الرسومية (├ │ ─ ...) لتسهيل المطابقة
     t = t.replace("\u200f", "").replace("\u200e", "")
-    # symbol
+    t = re.sub(r"[├┤└┘┐┌┴┬┼│─]", " ", t)
+
+    def _normalize_number(val: str) -> float:
+        """دعم الفواصل أو المسافات داخل الرقم."""
+        v = (val or "").strip().replace(" ", "")
+        # السماح بفواصل كفاصل عشري (0,734 → 0.734) وإزالة فواصل الآلاف
+        if v.count(",") > 1 and "." not in v:
+            v = v.replace(",", "")
+        else:
+            v = v.replace(",", ".")
+        return float(v)
+
+    # symbol (السطر قد يحتوي #SYMBOL أو SYMBOL/USDT دون #)
     m_sym = re.search(r"#\s*([A-Z0-9\-_\/]+)", t, re.IGNORECASE)
+    if not m_sym:
+        m_sym = re.search(r"\b([A-Z0-9]{2,}[/\-]?USDT)\b", t, re.IGNORECASE)
     if not m_sym:
         raise ValueError("symbol not found")
     symbol = m_sym.group(1).upper().replace("-", "").replace("/", "")
 
     # buy
-    m_buy = re.search(r"\bBUY\b\s*[-:]\s*([0-9]*\.?[0-9]+)", t, re.IGNORECASE)
+    m_buy = re.search(r"\bBUY\b[^0-9]*([0-9][0-9\.,]*)", t, re.IGNORECASE)
     if not m_buy:
         raise ValueError("buy not found")
-    entry = float(m_buy.group(1))
+    entry = _normalize_number(m_buy.group(1))
 
     # remove TP LONG lines before scanning
     t_clean = re.sub(r"TP\s*LONG.*", "", t, flags=re.IGNORECASE)
     # TPs
-    tps_pairs = re.findall(r"\bTP\s*(\d+)\s*[-:]\s*([0-9]*\.?[0-9]+)", t_clean, re.IGNORECASE)
-    tps_sorted = [float(val) for _, val in sorted(((int(n), v) for n, v in tps_pairs), key=lambda x: x[0])]
+    tps_pairs = re.findall(r"\bTP\s*(\d+)\s*[-:]?\s*([0-9][0-9\.,]*)", t_clean, re.IGNORECASE)
+    tps_sorted = [_normalize_number(val) for _, val in sorted(((int(n), v) for n, v in tps_pairs), key=lambda x: x[0])]
 
     # SL
-    m_sl = re.search(r"\bSL\b\s*[-:]\s*([0-9]*\.?[0-9]+)", t, re.IGNORECASE)
-    sl = float(m_sl.group(1)) if m_sl else 0.0
+    m_sl = re.search(r"\bSL\b[^0-9]*([0-9][0-9\.,]*)", t, re.IGNORECASE)
+    sl = _normalize_number(m_sl.group(1)) if m_sl else 0.0
 
     return symbol, entry, tps_sorted, sl
 
