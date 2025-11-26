@@ -5,7 +5,7 @@
 #       • أرضية = آخر TP مُلامس (≥ TP1 دائماً)
 #       • بيع فوري عند كسر الأرضية (FLOOR BREACH)
 #       • أو بيع عند هبوط ≥1% من القمّة مع بقاء السعر فوق الأرضية
-#  - SL الحقيقي الوحيد: بعد إغلاق شمعة 1h ≤ SL (بعد وقت الشراء) ⇒ رجوع 6 مسارات
+#  - SL: إشعار فقط عند إغلاق شمعة 1h ≤ SL (لا بيع، يُستكمل البحث عن الأهداف)
 #  - احترام وضع المحاكاة للخانات الموسومة simulated=True
 #  - تحديث SUMMARY_FILE حسب الربح/الخسارة
 #  - جميع الإشعارات عبر send_notification_tc (مع SYMBOL/T/C)
@@ -60,7 +60,7 @@ async def manual_close_monitor(
             targets = [float(tp1)] if tp1 else []
 
         # محاكاة؟
-        sim_override = bool(cell.get("simulated", False))
+        sim_override = bool(cell.get("simulated", is_simulation()))
 
         # بيانات تنفيذ الشراء
         bought_price = float(cell["bought_price"])
@@ -96,6 +96,7 @@ async def manual_close_monitor(
         trailing_active = bool(cell.get("trailing_active", False))
         peak_after_tp  = float(cell.get("trailing_peak", 0) or 0)
         last_tp_floor  = None  # أرضية = آخر TP مُلامس (≥ TP1)
+        sl_alerted     = False
 
         def _persist_trailing(active: bool, peak: float, floor: Optional[float]):
             try:
@@ -313,27 +314,24 @@ async def manual_close_monitor(
                     )
                     break
 
-            # 4) SL: بعد إغلاق شمعة 1h ≤ SL (بعد وقت الشراء)
-            candle = get_latest_candle(symbol, interval='1hour')
-            now_ms = datetime.now(timezone.utc).timestamp() * 1000.0
-            if candle:
-                interval_ms = _interval_to_ms('1hour')
-                candle_start_ms = float(candle["timestamp"])
-                candle_end_ms = candle_start_ms + interval_ms
-                trade_start_ms = (start_time.timestamp() * 1000.0) if start_time else ((datetime.now(timezone.utc).timestamp() - 3600.0) * 1000.0)
+            # 4) SL: إشعار فقط (لا بيع) بعد إغلاق شمعة 1h ≤ SL
+            if not sl_alerted:
+                candle = get_latest_candle(symbol, interval='1hour')
+                now_ms = datetime.now(timezone.utc).timestamp() * 1000.0
+                if candle:
+                    interval_ms = _interval_to_ms('1hour')
+                    candle_start_ms = float(candle["timestamp"])
+                    candle_end_ms = candle_start_ms + interval_ms
+                    trade_start_ms = (start_time.timestamp() * 1000.0) if start_time else ((datetime.now(timezone.utc).timestamp() - 3600.0) * 1000.0)
 
-                if (candle_end_ms <= now_ms and
-                    candle_end_ms > trade_start_ms and
-                    candle["close"] <= sl_price + EPS):
-                    try:
-                        sell_price, sell_qty, pnl = await _do_market_sell(exec_price_hint=candle["close"])
-                        await _finalize("stopped", sell_price, sell_qty, pnl, tag="SL (1h close)")
-                    except Exception as e:
+                    if (candle_end_ms <= now_ms and
+                        candle_end_ms > trade_start_ms and
+                        candle["close"] <= sl_price + EPS):
+                        sl_alerted = True
                         await send_notification_tc(
-                            f"❌ manual_close SL sell failed\n🧰 {e}",
+                            "🛑 SL touched (no sell). Continuing to monitor for targets.",
                             symbol=symbol, track_num=track_num, cycle_num=cycle_num
                         )
-                    break
 
             await asyncio.sleep(poll_sec)
 
