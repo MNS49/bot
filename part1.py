@@ -59,6 +59,13 @@ except Exception:
 SECOND_TELEGRAM_USERNAME = os.getenv("SECOND_TELEGRAM_USERNAME", "0")
 SECOND_TELEGRAM_ID = int(os.getenv("SECOND_TELEGRAM_ID", "0"))  # اتركه 0 لاستخدام الـ username
 
+# --- حساب للأوامر والإشعارات بدلاً من الرسائل المحفوظة ---
+COMMAND_TELEGRAM_USERNAME = os.getenv(
+    "COMMAND_TELEGRAM_USERNAME",
+    SECOND_TELEGRAM_USERNAME or "me"
+)
+COMMAND_TELEGRAM_ID = int(os.getenv("COMMAND_TELEGRAM_ID", "0"))
+
 # -------- إعدادات التداول --------
 INITIAL_TRADE_AMOUNT = float(os.getenv("INITIAL_TRADE_AMOUNT", "50.0"))          # المبلغ الأساسي للمسار 1
 TRADE_INCREMENT_PERCENT = float(os.getenv("TRADE_INCREMENT_PERCENT", "2.0"))     # نسبة الزيادة بين المسارات

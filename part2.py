@@ -207,6 +207,14 @@ def is_simulation() -> bool:
     except NameError:
         return False
 
+def set_simulation_mode(enabled: bool) -> None:
+    """تفعيل/تعطيل وضع المحاكاة أثناء التشغيل."""
+    global SIMULATION_MODE
+    try:
+        SIMULATION_MODE = bool(enabled)
+    except Exception:
+        pass
+
 # مخزن أوامر وهمي عند التفعيل
 _SIM_ORDERS: Dict[str, Dict[str, Any]] = {}  # orderId -> info
 
@@ -409,7 +417,7 @@ def compose_msg(
 
 async def send_notification(message: str, to_telegram: bool = True, tag: Optional[str] = None):
     """
-    - لما to_telegram=True: إرسال إلى 'Saved Messages'.
+    - لما to_telegram=True: إرسال إلى حساب الأوامر/الإشعارات (بديل الرسائل المحفوظة).
     - لما False: تجميع برسائل التيرمينال مع عدّاد.
     ملاحظة: إذا تم الاستدعاء قبل client.start() رح تفشل Telethon؛ استخدم to_telegram=False قبل البدء.
     """
@@ -418,7 +426,8 @@ async def send_notification(message: str, to_telegram: bool = True, tag: Optiona
         console_echo(message)
         return
     try:
-        await client.send_message('me', message)
+        target = _resolve_command_chat()
+        await client.send_message(target, message)
         console_echo(message)
     except Exception as e:
         # تجنّب التعطّل بسبب توقيت الاتصال
@@ -471,6 +480,24 @@ def log_terminal_notification(message: str, tag: Optional[str] = None):
 
     with open(TERMINAL_LOG_FILE, 'w') as f:
         json.dump(log_data, f, indent=2)
+
+# ---- حساب الأوامر والإشعارات (username / ID) ----
+def _resolve_command_chat():
+    """يحدد الحساب الأساسي للأوامر والإشعارات بدلاً من Saved Messages."""
+    try:
+        if isinstance(COMMAND_TELEGRAM_ID, int) and COMMAND_TELEGRAM_ID > 0:
+            return COMMAND_TELEGRAM_ID
+    except Exception:
+        pass
+
+    try:
+        uname = (COMMAND_TELEGRAM_USERNAME or "me").strip()
+    except Exception:
+        uname = "me"
+
+    if uname and uname != "me" and not uname.startswith("@"):
+        uname = "@" + uname
+    return uname or "me"
 
 # ---- Send to second Telegram account (by username or ID) ----
 async def send_to_second_account(message: str):

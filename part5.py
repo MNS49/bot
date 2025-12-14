@@ -911,12 +911,28 @@ def _parse_signal_text(text: str):
     return symbol, entry, tps_sorted, sl
 
 # -- Channel: recommendations listener (Email Gate + Blacklist) --
+def _resolve_channel_chat():
+    target = (CHANNEL_USERNAME or "").strip()
+    if not target:
+        return None
+    if target.startswith("http") or target.startswith("tg://") or target.startswith("+"):
+        try:
+            return client.loop.run_until_complete(client.get_entity(target))
+        except Exception as e:
+            print(f"❌ Failed to resolve channel link: {e}")
+            return None
+    return target
+
 def attach_channel_handler():
-    if not CHANNEL_USERNAME or events is None:
-        print("⚠️ CHANNEL_USERNAME not set or Telethon events unavailable; recommendations listener disabled.")
+    if events is None:
+        print("⚠️ Telethon events unavailable; recommendations listener disabled.")
         return
 
-    @client.on(events.NewMessage(chats=CHANNEL_USERNAME))
+    chats_target = _resolve_channel_chat()
+    if not chats_target:
+        print("⚠️ CHANNEL_USERNAME not set or invalid; recommendations listener disabled.")
+        return
+
     async def recommendation_handler(event):
         if not is_bot_active():
             return
@@ -961,6 +977,8 @@ def attach_channel_handler():
             await send_notification_tc("❌ Internal error: execute_trade not available (handler).", symbol=symbol)
             return
         await exec_fn(symbol, entry_price, sl_price, targets)
+
+    client.add_event_handler(recommendation_handler, events.NewMessage(chats=chats_target))
 
 # ---------- SELL helpers ----------
 
@@ -1064,10 +1082,12 @@ async def show_verlauf():
 
     await _send_long_message("\n".join(lines), part_title="verlauf")
 
-# ===== Commands on 'Saved Messages' =====
+# ===== Commands on control account (instead of Saved Messages) =====
 _pending_close_request = {"waiting": False}
 
-@client.on(events.NewMessage(chats='me'))
+COMMAND_CHAT = _resolve_command_chat()
+
+@client.on(events.NewMessage(chats=COMMAND_CHAT))
 async def command_handler(event):
     text = event.raw_text.strip()
     cmd = text.lower()
@@ -1141,6 +1161,17 @@ async def command_handler(event):
             await send_notification("📧 Email gate changed → OPEN ✅ (accepting channel recommendations)")
         except Exception as e:
             await send_notification(f"❌ Failed to open Email gate: {e}")
+        return
+
+    # ===== Simulation toggle =====
+    if cmd in ("sim on", "simulation on"):
+        set_simulation_mode(True)
+        await send_notification("🧪 Simulation mode is now ON (no real orders).")
+        return
+
+    if cmd in ("sim off", "simulation off"):
+        set_simulation_mode(False)
+        await send_notification("⚙️ Simulation mode is now OFF (live trading).")
         return
 
     # ===== Debug funds toggles =====
